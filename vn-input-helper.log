@@ -1,0 +1,132 @@
+=== VN Input Helper started ===
+Log file: C:\Users\ThanhsMind\Downloads\PromptVNInput\vn-input-helper.log
+GOARCH: amd64, sizeof(uintptr): 8
+Config loaded: C:\Users\ThanhsMind\Downloads\PromptVNInput\config.json
+Config: hotkey=Ctrl+Shift+Space, window=500x200
+hInstance = 140698838368256
+cursor = 65539
+WNDCLASSEXW size = 80
+Atom = 50315
+WM_CREATE received
+editHwnd = 12193682
+Window initialized and hidden
+mainHwnd = 1185630
+RegisterHotKey: mod=0x6 vk=0x20
+Hotkey registered OK
+Entering message loop
+WM_HOTKEY in loop
+Saved prev window: 5115154
+Popup shown
+Text: teset xem nó có chạy đúng kông
+Popup hidden
+Focus check 0: current=5115154, target=5115154
+Ctrl+V simulated
+Clipboard restored
+WM_HOTKEY in loop
+Saved prev window: 5115154
+Popup shown
+Popup hidden
+WM_HOTKEY in loop
+Saved prev window: 5115154
+Popup shown
+Text: Tôi xem đúng không
+Popup hidden
+Focus check 0: current=5115154, target=5115154
+Ctrl+V simulated
+Clipboard restored
+WM_HOTKEY in loop
+Saved prev window: 201556
+Popup shown
+Text: Tôi xem đúng không
+Popup hidden
+Focus check 0: current=201556, target=201556
+Ctrl+V simulated
+Clipboard restored
+WM_HOTKEY in loop
+Saved prev window: 859182
+Popup shown
+Text: Tôi xem đúng không
+Popup hidden
+Focus check 0: current=859182, target=859182
+Ctrl+V simulated
+Clipboard restored
+WM_HOTKEY in loop
+Saved prev window: 859182
+Popup shown
+Text: há há
+Popup hidden
+Focus check 0: current=859182, target=859182
+Ctrl+V simulated
+Clipboard restored
+WM_HOTKEY in loop
+Saved prev window: 15800550
+Popup shown
+Text: Thử xem nọi dung này có đúng và dễ đánh không
+Popup hidden
+Focus check 0: current=15800550, target=15800550
+Ctrl+V simulated
+Clipboard restored
+WM_HOTKEY in loop
+Saved prev window: 15800550
+Popup shown
+Text: Chuẩn luôn ấy chứ, ngon lành rồi hàhaf
+Popup hidden
+Focus check 0: current=15800550, target=15800550
+Ctrl+V simulated
+Clipboard restored
+WM_HOTKEY in loop
+Saved prev window: 15800550
+Popup shown
+Text: Tooi cungx thwur xem đánh tiếng việt có tố hơn không anof
+Popup hidden
+Focus check 0: current=15800550, target=15800550
+Ctrl+V simulated
+Clipboard restored
+WM_HOTKEY in loop
+Saved prev window: 15800550
+Popup shown
+Popup hidden
+WM_HOTKEY in loop
+Saved prev window: 15800550
+Popup shown
+Popup hidden
+WM_HOTKEY in loop
+Saved prev window: 15800550
+Popup shown
+Text: tôi muốn thử xem đánh tiếng việt nó còn bị lỗi hay không 
+Popup hidden
+Focus check 0: current=15800550, target=15800550
+Ctrl+V simulated
+Clipboard restored
+WM_HOTKEY in loop
+Saved prev window: 15800550
+Popup shown
+Text: Ngon lành nhỉ, cần test thêm
+Popup hidden
+Focus check 0: current=15800550, target=15800550
+Ctrl+V simulated
+Clipboard restored
+WM_HOTKEY in loop
+Saved prev window: 15800550
+Popup shown
+Text: Thế này thì chắc ổn
+Popup hidden
+Focus check 0: current=15800550, target=15800550
+Ctrl+V simulated
+Clipboard restored
+WM_HOTKEY in loop
+Saved prev window: 39459898
+Popup shown
+Text: Thử đánh tiếng việt xem còn lỗi không
+Popup hidden
+Focus check 0: current=39459898, target=39459898
+Ctrl+V simulated
+Clipboard restored
+WM_HOTKEY in loop
+Saved prev window: 39459898
+Popup shown
+Text: ok rồi nhé
+Popup hidden
+Focus check 0: current=39459898, target=39459898
+Ctrl+V simulated
+Clipboard restored

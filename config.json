@@ -1,0 +1,11 @@
+{
+  "hotkey": {
+    "modifiers": ["Ctrl", "Shift"],
+    "key": "Space"
+  },
+  "window": {
+    "width": 500,
+    "height": 200,
+    "title": "Nhập nội dung"
+  }
+}
