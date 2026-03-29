@@ -122,6 +122,7 @@ const (
 	VK_CONTROL = 0x11
 	VK_V       = 0x56
 	VK_SPACE   = 0x20
+	VK_P       = 0x50
 
 	CF_UNICODETEXT  = 13
 	GMEM_MOVEABLE   = 0x0002
@@ -144,6 +145,10 @@ const (
 	IDC_PICKER_LIST  = 2001
 	IDC_PICKER_OK    = 2002
 	IDC_PICKER_CANCEL = 2003
+	IDC_PICKER_SEARCH = 2004
+
+	EN_CHANGE          = 0x0300
+	LB_RESETCONTENT    = 0x0184
 
 	LBS_NOTIFY           = 0x0001
 	LBS_NOINTEGRALHEIGHT = 0x0100
@@ -529,7 +534,7 @@ func parsePromptFile(path string) (Prompt, error) {
 		p.Name = strings.TrimSuffix(filepath.Base(path), filepath.Ext(path))
 	}
 
-	p.Content = strings.TrimSpace(strings.Join(contentLines, "\n"))
+	p.Content = strings.TrimSpace(strings.Join(contentLines, "\r\n"))
 
 	if !frontmatterDone {
 		return Prompt{}, fmt.Errorf("no frontmatter found")
@@ -543,10 +548,12 @@ func parsePromptFile(path string) (Prompt, error) {
 // ============================================================
 
 var (
-	pickerHwnd      syscall.Handle
-	pickerListHwnd  syscall.Handle
-	loadedPrompts   []Prompt
-	pickerClassName *uint16
+	pickerHwnd       syscall.Handle
+	pickerListHwnd   syscall.Handle
+	pickerSearchHwnd syscall.Handle
+	loadedPrompts    []Prompt
+	filteredIndices  []int
+	pickerClassName  *uint16
 	pickerRegistered bool
 )
 
@@ -606,25 +613,38 @@ func showPromptPicker() {
 func pickerWndProc(hwnd syscall.Handle, msg uint32, wParam, lParam uintptr) uintptr {
 	switch msg {
 	case WM_CREATE:
-		// Listbox
+		// Search box
 		ret, _, _ := pCreateWindowExW.Call(
+			WS_EX_CLIENTEDGE,
+			uintptr(unsafe.Pointer(utf16Ptr("EDIT"))),
+			0,
+			WS_CHILD|WS_VISIBLE|WS_TABSTOP,
+			10, 10,
+			410, 28,
+			uintptr(hwnd), IDC_PICKER_SEARCH, 0, 0)
+		pickerSearchHwnd = syscall.Handle(ret)
+
+		// Listbox
+		ret, _, _ = pCreateWindowExW.Call(
 			WS_EX_CLIENTEDGE,
 			uintptr(unsafe.Pointer(utf16Ptr("LISTBOX"))),
 			0,
 			WS_CHILD|WS_VISIBLE|WS_VSCROLL|WS_TABSTOP|LBS_NOTIFY|LBS_NOINTEGRALHEIGHT,
-			10, 10,
-			410, 300,
+			10, 45,
+			410, 265,
 			uintptr(hwnd), IDC_PICKER_LIST, 0, 0)
 		pickerListHwnd = syscall.Handle(ret)
 
-		// Populate listbox
-		for _, p := range loadedPrompts {
+		// Populate listbox with all prompts
+		filteredIndices = nil
+		for i, p := range loadedPrompts {
 			displayText := p.Name
 			if p.Description != "" {
 				displayText = p.Name + " — " + p.Description
 			}
 			pSendMessageW.Call(uintptr(pickerListHwnd), LB_ADDSTRING, 0,
 				uintptr(unsafe.Pointer(utf16Ptr(displayText))))
+			filteredIndices = append(filteredIndices, i)
 		}
 
 		// Insert button
@@ -647,9 +667,12 @@ func pickerWndProc(hwnd syscall.Handle, msg uint32, wParam, lParam uintptr) uint
 
 		// Apply font
 		if hFont != 0 {
+			pSendMessageW.Call(uintptr(pickerSearchHwnd), WM_SETFONT, hFont, 1)
 			pSendMessageW.Call(uintptr(pickerListHwnd), WM_SETFONT, hFont, 1)
-			// Font for buttons: enumerate children would be complex, apply to known handles
 		}
+
+		// Focus search box
+		pSetFocus.Call(uintptr(pickerSearchHwnd))
 
 		return 0
 
@@ -662,6 +685,8 @@ func pickerWndProc(hwnd syscall.Handle, msg uint32, wParam, lParam uintptr) uint
 			insertSelectedPrompt()
 		case id == IDC_PICKER_CANCEL:
 			pDestroyWindow.Call(uintptr(hwnd))
+		case id == IDC_PICKER_SEARCH && notif == EN_CHANGE:
+			filterPrompts()
 		}
 		return 0
 
@@ -672,6 +697,7 @@ func pickerWndProc(hwnd syscall.Handle, msg uint32, wParam, lParam uintptr) uint
 	case WM_DESTROY:
 		pickerHwnd = 0
 		pickerListHwnd = 0
+		pickerSearchHwnd = 0
 		// Return focus to edit control
 		pSetFocus.Call(uintptr(editHwnd))
 		return 0
@@ -681,23 +707,58 @@ func pickerWndProc(hwnd syscall.Handle, msg uint32, wParam, lParam uintptr) uint
 	return r
 }
 
+func filterPrompts() {
+	if pickerSearchHwnd == 0 || pickerListHwnd == 0 {
+		return
+	}
+
+	// Get search text
+	length, _, _ := pSendMessageW.Call(uintptr(pickerSearchHwnd), WM_GETTEXTLENGTH, 0, 0)
+	query := ""
+	if length > 0 {
+		buf := make([]uint16, length+1)
+		pSendMessageW.Call(uintptr(pickerSearchHwnd), WM_GETTEXT, length+1, uintptr(unsafe.Pointer(&buf[0])))
+		query = strings.ToLower(syscall.UTF16ToString(buf))
+	}
+
+	// Clear listbox
+	pSendMessageW.Call(uintptr(pickerListHwnd), LB_RESETCONTENT, 0, 0)
+	filteredIndices = nil
+
+	for i, p := range loadedPrompts {
+		if query != "" {
+			searchable := strings.ToLower(p.Name + " " + p.Description + " " + p.Content)
+			if !strings.Contains(searchable, query) {
+				continue
+			}
+		}
+		displayText := p.Name
+		if p.Description != "" {
+			displayText = p.Name + " — " + p.Description
+		}
+		pSendMessageW.Call(uintptr(pickerListHwnd), LB_ADDSTRING, 0,
+			uintptr(unsafe.Pointer(utf16Ptr(displayText))))
+		filteredIndices = append(filteredIndices, i)
+	}
+}
+
 func insertSelectedPrompt() {
 	if pickerListHwnd == 0 {
 		return
 	}
 	sel, _, _ := pSendMessageW.Call(uintptr(pickerListHwnd), LB_GETCURSEL, 0, 0)
-	if int(sel) == LB_ERR || int(sel) < 0 || int(sel) >= len(loadedPrompts) {
+	if int(sel) == LB_ERR || int(sel) < 0 || int(sel) >= len(filteredIndices) {
 		return
 	}
 
-	prompt := loadedPrompts[int(sel)]
+	prompt := loadedPrompts[filteredIndices[int(sel)]]
 	existing := getEditText()
 
 	var newText string
 	if existing == "" {
 		newText = prompt.Content
 	} else {
-		newText = existing + "\n" + prompt.Content
+		newText = existing + "\r\n" + prompt.Content
 	}
 
 	pSendMessageW.Call(uintptr(editHwnd), WM_SETTEXT, 0,
@@ -1158,6 +1219,15 @@ func main() {
 		if isCtrlEnter(&m) && m.Hwnd == editHwnd {
 			doOK()
 			continue
+		}
+
+		// Ctrl+P to open prompt picker
+		if m.Message == WM_KEYDOWN && m.WParam == VK_P && popupVisible && pickerHwnd == 0 {
+			state, _, _ := pGetKeyState.Call(VK_CONTROL)
+			if (state & 0x8000) != 0 {
+				showPromptPicker()
+				continue
+			}
 		}
 
 		// Esc
