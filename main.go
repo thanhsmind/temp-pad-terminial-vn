@@ -1,6 +1,7 @@
 package main
 
 import (
+	"bufio"
 	"encoding/json"
 	"fmt"
 	"os"
@@ -51,6 +52,8 @@ var (
 	pGetClipboardData    = user32.NewProc("GetClipboardData")
 	pSendInput           = user32.NewProc("SendInput")
 	pLoadCursorW         = user32.NewProc("LoadCursorW")
+	pDestroyWindow       = user32.NewProc("DestroyWindow")
+	pUpdateWindow        = user32.NewProc("UpdateWindow")
 
 	pGetModuleHandleW = kernel32.NewProc("GetModuleHandleW")
 	pGlobalAlloc      = kernel32.NewProc("GlobalAlloc")
@@ -134,9 +137,20 @@ const (
 
 	IDC_ARROW = 32512
 
-	IDC_EDIT_CTRL  = 1001
-	IDC_OK_BTN     = 1002
-	IDC_CANCEL_BTN = 1003
+	IDC_EDIT_CTRL    = 1001
+	IDC_OK_BTN       = 1002
+	IDC_CANCEL_BTN   = 1003
+	IDC_PROMPTS_BTN  = 1004
+	IDC_PICKER_LIST  = 2001
+	IDC_PICKER_OK    = 2002
+	IDC_PICKER_CANCEL = 2003
+
+	LBS_NOTIFY           = 0x0001
+	LBS_NOINTEGRALHEIGHT = 0x0100
+	LBN_DBLCLK           = 2
+	LB_ADDSTRING          = 0x0180
+	LB_GETCURSEL          = 0x0188
+	LB_ERR                = -1
 
 	HOTKEY_ID = 9999
 
@@ -426,6 +440,275 @@ func manageAutoStart() {
 }
 
 // ============================================================
+// Prompt templates
+// ============================================================
+
+type Prompt struct {
+	Name        string
+	Description string
+	Content     string
+}
+
+func loadPrompts() []Prompt {
+	exePath, err := os.Executable()
+	if err != nil {
+		logf("Prompts: failed to get exe path: %v", err)
+		return nil
+	}
+	promptsDir := filepath.Join(filepath.Dir(exePath), "prompts")
+
+	entries, err := os.ReadDir(promptsDir)
+	if err != nil {
+		logf("Prompts: cannot read directory '%s': %v", promptsDir, err)
+		return nil
+	}
+
+	var prompts []Prompt
+	for _, entry := range entries {
+		if entry.IsDir() || !strings.HasSuffix(strings.ToLower(entry.Name()), ".md") {
+			continue
+		}
+		p, err := parsePromptFile(filepath.Join(promptsDir, entry.Name()))
+		if err != nil {
+			logf("Prompts: skipping '%s': %v", entry.Name(), err)
+			continue
+		}
+		prompts = append(prompts, p)
+	}
+
+	logf("Prompts: loaded %d prompt(s)", len(prompts))
+	return prompts
+}
+
+func parsePromptFile(path string) (Prompt, error) {
+	f, err := os.Open(path)
+	if err != nil {
+		return Prompt{}, err
+	}
+	defer f.Close()
+
+	scanner := bufio.NewScanner(f)
+	var p Prompt
+	inFrontmatter := false
+	frontmatterDone := false
+	var contentLines []string
+
+	for scanner.Scan() {
+		line := scanner.Text()
+		trimmed := strings.TrimSpace(line)
+
+		if !inFrontmatter && !frontmatterDone && trimmed == "---" {
+			inFrontmatter = true
+			continue
+		}
+		if inFrontmatter && trimmed == "---" {
+			inFrontmatter = false
+			frontmatterDone = true
+			continue
+		}
+		if inFrontmatter {
+			if idx := strings.Index(line, ":"); idx > 0 {
+				key := strings.TrimSpace(line[:idx])
+				val := strings.TrimSpace(line[idx+1:])
+				switch strings.ToLower(key) {
+				case "name":
+					p.Name = val
+				case "description":
+					p.Description = val
+				}
+			}
+			continue
+		}
+		if frontmatterDone {
+			contentLines = append(contentLines, line)
+		}
+	}
+
+	if p.Name == "" {
+		// Use filename as fallback
+		p.Name = strings.TrimSuffix(filepath.Base(path), filepath.Ext(path))
+	}
+
+	p.Content = strings.TrimSpace(strings.Join(contentLines, "\n"))
+
+	if !frontmatterDone {
+		return Prompt{}, fmt.Errorf("no frontmatter found")
+	}
+
+	return p, nil
+}
+
+// ============================================================
+// Prompt picker window
+// ============================================================
+
+var (
+	pickerHwnd      syscall.Handle
+	pickerListHwnd  syscall.Handle
+	loadedPrompts   []Prompt
+	pickerClassName *uint16
+	pickerRegistered bool
+)
+
+func showPromptPicker() {
+	prompts := loadPrompts()
+	if len(prompts) == 0 {
+		pMessageBoxW.Call(uintptr(mainHwnd),
+			uintptr(unsafe.Pointer(utf16Ptr("Không tìm thấy prompt nào.\nTạo thư mục 'prompts/' cạnh file exe và thêm các file .md vào đó."))),
+			uintptr(unsafe.Pointer(utf16Ptr("Prompts"))),
+			MB_OK|MB_ICONINFORMATION)
+		return
+	}
+	loadedPrompts = prompts
+
+	if !pickerRegistered {
+		pickerClassName = utf16Ptr("VNPromptPicker")
+		var wcex WNDCLASSEXW
+		wcex.CbSize = uint32(unsafe.Sizeof(wcex))
+		wcex.LpfnWndProc = syscall.NewCallback(pickerWndProc)
+		wcex.HCursor, _, _ = pLoadCursorW.Call(0, IDC_ARROW)
+		wcex.HbrBackground = 5 + 1 // COLOR_WINDOW + 1
+		wcex.LpszClassName = pickerClassName
+		wcex.HInstance, _, _ = pGetModuleHandleW.Call(0)
+		ret, _, _ := pRegisterClassExW.Call(uintptr(unsafe.Pointer(&wcex)))
+		if ret == 0 {
+			logf("Prompts: failed to register picker window class")
+			return
+		}
+		pickerRegistered = true
+	}
+
+	// Get screen size for centering
+	screenW, _, _ := pGetSystemMetrics.Call(0)
+	screenH, _, _ := pGetSystemMetrics.Call(1)
+	pickerW := 450
+	pickerH := 400
+	x := (int(screenW) - pickerW) / 2
+	y := (int(screenH) - pickerH) / 2
+
+	ret, _, _ := pCreateWindowExW.Call(
+		WS_EX_TOPMOST,
+		uintptr(unsafe.Pointer(pickerClassName)),
+		uintptr(unsafe.Pointer(utf16Ptr("Chọn Prompt"))),
+		WS_OVERLAPPED|WS_CAPTION|WS_SYSMENU,
+		uintptr(x), uintptr(y),
+		uintptr(pickerW), uintptr(pickerH),
+		0, 0, 0, 0)
+	pickerHwnd = syscall.Handle(ret)
+
+	pShowWindow.Call(uintptr(pickerHwnd), SW_SHOW)
+	pUpdateWindow.Call(uintptr(pickerHwnd))
+}
+
+func pickerWndProc(hwnd syscall.Handle, msg uint32, wParam, lParam uintptr) uintptr {
+	switch msg {
+	case WM_CREATE:
+		// Listbox
+		ret, _, _ := pCreateWindowExW.Call(
+			WS_EX_CLIENTEDGE,
+			uintptr(unsafe.Pointer(utf16Ptr("LISTBOX"))),
+			0,
+			WS_CHILD|WS_VISIBLE|WS_VSCROLL|WS_TABSTOP|LBS_NOTIFY|LBS_NOINTEGRALHEIGHT,
+			10, 10,
+			410, 300,
+			uintptr(hwnd), IDC_PICKER_LIST, 0, 0)
+		pickerListHwnd = syscall.Handle(ret)
+
+		// Populate listbox
+		for _, p := range loadedPrompts {
+			displayText := p.Name
+			if p.Description != "" {
+				displayText = p.Name + " — " + p.Description
+			}
+			pSendMessageW.Call(uintptr(pickerListHwnd), LB_ADDSTRING, 0,
+				uintptr(unsafe.Pointer(utf16Ptr(displayText))))
+		}
+
+		// Insert button
+		pCreateWindowExW.Call(0,
+			uintptr(unsafe.Pointer(utf16Ptr("BUTTON"))),
+			uintptr(unsafe.Pointer(utf16Ptr("Chèn"))),
+			WS_CHILD|WS_VISIBLE|WS_TABSTOP|BS_DEFPUSHBUTTON,
+			230, 320,
+			100, 35,
+			uintptr(hwnd), IDC_PICKER_OK, 0, 0)
+
+		// Cancel button
+		pCreateWindowExW.Call(0,
+			uintptr(unsafe.Pointer(utf16Ptr("BUTTON"))),
+			uintptr(unsafe.Pointer(utf16Ptr("Hủy"))),
+			WS_CHILD|WS_VISIBLE|WS_TABSTOP|BS_PUSHBUTTON,
+			340, 320,
+			80, 35,
+			uintptr(hwnd), IDC_PICKER_CANCEL, 0, 0)
+
+		// Apply font
+		if hFont != 0 {
+			pSendMessageW.Call(uintptr(pickerListHwnd), WM_SETFONT, hFont, 1)
+			// Font for buttons: enumerate children would be complex, apply to known handles
+		}
+
+		return 0
+
+	case WM_COMMAND:
+		id := int(wParam & 0xFFFF)
+		notif := int((wParam >> 16) & 0xFFFF)
+
+		switch {
+		case id == IDC_PICKER_OK, (id == IDC_PICKER_LIST && notif == LBN_DBLCLK):
+			insertSelectedPrompt()
+		case id == IDC_PICKER_CANCEL:
+			pDestroyWindow.Call(uintptr(hwnd))
+		}
+		return 0
+
+	case WM_CLOSE:
+		pDestroyWindow.Call(uintptr(hwnd))
+		return 0
+
+	case WM_DESTROY:
+		pickerHwnd = 0
+		pickerListHwnd = 0
+		// Return focus to edit control
+		pSetFocus.Call(uintptr(editHwnd))
+		return 0
+	}
+
+	r, _, _ := pDefWindowProcW.Call(uintptr(hwnd), uintptr(msg), wParam, lParam)
+	return r
+}
+
+func insertSelectedPrompt() {
+	if pickerListHwnd == 0 {
+		return
+	}
+	sel, _, _ := pSendMessageW.Call(uintptr(pickerListHwnd), LB_GETCURSEL, 0, 0)
+	if int(sel) == LB_ERR || int(sel) < 0 || int(sel) >= len(loadedPrompts) {
+		return
+	}
+
+	prompt := loadedPrompts[int(sel)]
+	existing := getEditText()
+
+	var newText string
+	if existing == "" {
+		newText = prompt.Content
+	} else {
+		newText = existing + "\n" + prompt.Content
+	}
+
+	pSendMessageW.Call(uintptr(editHwnd), WM_SETTEXT, 0,
+		uintptr(unsafe.Pointer(utf16Ptr(newText))))
+
+	logf("Prompts: inserted '%s'", prompt.Name)
+
+	// Close picker
+	if pickerHwnd != 0 {
+		pDestroyWindow.Call(uintptr(pickerHwnd))
+	}
+}
+
+// ============================================================
 // App state
 // ============================================================
 
@@ -434,6 +717,7 @@ var (
 	editHwnd     syscall.Handle
 	okBtn        syscall.Handle
 	cancelBtn    syscall.Handle
+	promptsBtn   syscall.Handle
 	prevWindow   uintptr
 	popupVisible bool
 	hFont        uintptr
@@ -501,11 +785,22 @@ func wndProc(hwnd syscall.Handle, msg uint32, wParam, lParam uintptr) uintptr {
 			uintptr(hwnd), IDC_CANCEL_BTN, 0, 0)
 		cancelBtn = syscall.Handle(ret)
 
+		// Prompts button
+		ret, _, _ = pCreateWindowExW.Call(0,
+			uintptr(unsafe.Pointer(utf16Ptr("BUTTON"))),
+			uintptr(unsafe.Pointer(utf16Ptr("Prompts"))),
+			WS_CHILD|WS_VISIBLE|WS_TABSTOP|BS_PUSHBUTTON,
+			10, uintptr(h-80),
+			100, 35,
+			uintptr(hwnd), IDC_PROMPTS_BTN, 0, 0)
+		promptsBtn = syscall.Handle(ret)
+
 		// Font
 		hFont = createFont()
 		pSendMessageW.Call(uintptr(editHwnd), WM_SETFONT, hFont, 1)
 		pSendMessageW.Call(uintptr(okBtn), WM_SETFONT, hFont, 1)
 		pSendMessageW.Call(uintptr(cancelBtn), WM_SETFONT, hFont, 1)
+		pSendMessageW.Call(uintptr(promptsBtn), WM_SETFONT, hFont, 1)
 
 		pShowWindow.Call(uintptr(hwnd), SW_HIDE)
 		logf("Window initialized and hidden")
@@ -525,6 +820,8 @@ func wndProc(hwnd syscall.Handle, msg uint32, wParam, lParam uintptr) uintptr {
 			doOK()
 		case IDC_CANCEL_BTN:
 			hidePopup()
+		case IDC_PROMPTS_BTN:
+			showPromptPicker()
 		}
 		return 0
 
