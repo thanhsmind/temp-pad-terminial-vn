@@ -1,6 +1,6 @@
 ---
-name: DKfD- P6 - Knowledge Distillation from Documents
-description:  P6- Bản Chưng Cất Hoàn Chỉnh
+name: DKfD-P6
+description: Bản Chưng Cất Hoàn Chỉnh
 ---
 Tổng hợp toàn bộ phân tích từ các bước trước thành MỘT BẢN CHƯNG CẤT theo cấu trúc:
 

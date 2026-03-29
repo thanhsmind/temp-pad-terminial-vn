@@ -1,6 +1,6 @@
 ---
-name: DKfD- P5 - Knowledge Distillation from Documents
-description: P5- Bản Đồ Tình Huống, Hành Động & Câu Chuyện
+name: DKfD-P5
+description: Bản Đồ Tình Huống, Hành Động & Câu Chuyện
 ---
 Ba sản phẩm:
 

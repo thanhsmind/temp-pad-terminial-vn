@@ -1,6 +1,6 @@
 ---
-name: DKfD- P7 - Knowledge Distillation from Documents 
-description: P7- Tổng Hợp Chéo (Chỉ dùng khi có ≥2 tài liệu)
+name: DKfD-P7 
+description: Tổng Hợp Chéo (Chỉ dùng khi có ≥2 tài liệu)
 ---
 Tôi đã phân tích [N] tài liệu cùng chủ đề [CHỦ ĐỀ] trong notebook này. Dựa trên tất cả các nguồn, hãy tổng hợp chéo:
 

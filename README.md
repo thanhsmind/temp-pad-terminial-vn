@@ -75,3 +75,4 @@ Chỉnh file `config.json` cùng thư mục với exe:
 - Popup luôn hiện trên cùng (topmost) để không bị che
 - Dùng Win32 EDIT control native → IME tiếng Việt hoạt động bình thường
 - Nếu phím tắt bị conflict với app khác, đổi trong config.json rồi restart
+

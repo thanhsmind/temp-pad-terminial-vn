@@ -1,6 +1,6 @@
 ---
-name: DKfD- P2 - Knowledge Distillation from Documents
-description: P2- Framework, Mô Hình & Khuyến Nghị
+name: DKfD-P2
+description: Framework, Mô Hình & Khuyến Nghị
 ---
 Trích xuất TẤT CẢ framework, mô hình, quy trình, ma trận, hoặc bộ khuyến nghị hành động trong tài liệu. Bao gồm cả những mô hình không được đặt tên chính thức.
 

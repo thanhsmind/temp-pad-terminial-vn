@@ -1,6 +1,6 @@
 ---
-name: DKfD- P3 - Knowledge Distillation from Documents
-description: P3- Khoảng Trống, Đối Chiếu & Phân Loại Giá Trị
+name: DKfD-P3
+description: Khoảng Trống, Đối Chiếu & Phân Loại Giá Trị
 ---
 Phân tích theo 3 phần:
 

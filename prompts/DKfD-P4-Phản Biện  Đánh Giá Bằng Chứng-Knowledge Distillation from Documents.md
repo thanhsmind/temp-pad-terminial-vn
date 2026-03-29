@@ -1,6 +1,6 @@
 ---
-name: DKfD- P4 - Knowledge Distillation from Documents
-description: P4- Phản Biện & Đánh Giá Bằng Chứng
+name: DKfD-P4
+description: Phản Biện & Đánh Giá Bằng Chứng
 ---
 Hai phần:
 

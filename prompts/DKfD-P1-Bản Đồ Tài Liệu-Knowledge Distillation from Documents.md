@@ -1,6 +1,6 @@
 ---
-name: DKfD- P1 - Knowledge Distillation from Documents
-description: P1- Bản Đồ Tài Liệu
+name: DKfD-P1
+description: Bản Đồ Tài Liệu
 ---
 Phân tích tài liệu nguồn theo các mục sau:
 
