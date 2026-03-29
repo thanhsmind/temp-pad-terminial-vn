@@ -260,8 +260,8 @@ func loadConfig() {
 	// Defaults
 	cfg.Hotkey.Modifiers = []string{"Ctrl", "Shift"}
 	cfg.Hotkey.Key = "Space"
-	cfg.Window.Width = 500
-	cfg.Window.Height = 200
+	cfg.Window.Width = 600
+	cfg.Window.Height = 350
 	cfg.Window.Title = "Nhập nội dung"
 
 	paths := []string{"config.json"}
@@ -386,8 +386,8 @@ func wndProc(hwnd syscall.Handle, msg uint32, wParam, lParam uintptr) uintptr {
 			uintptr(unsafe.Pointer(utf16Ptr("BUTTON"))),
 			uintptr(unsafe.Pointer(utf16Ptr("OK (Ctrl+Enter)"))),
 			WS_CHILD|WS_VISIBLE|WS_TABSTOP|BS_DEFPUSHBUTTON,
-			uintptr(w-240), uintptr(h-80),
-			100, 35,
+			uintptr(w-300), uintptr(h-80),
+			160, 35,
 			uintptr(hwnd), IDC_OK_BTN, 0, 0)
 		okBtn = syscall.Handle(ret)
 
@@ -397,7 +397,7 @@ func wndProc(hwnd syscall.Handle, msg uint32, wParam, lParam uintptr) uintptr {
 			uintptr(unsafe.Pointer(utf16Ptr("Hủy (Esc)"))),
 			WS_CHILD|WS_VISIBLE|WS_TABSTOP|BS_PUSHBUTTON,
 			uintptr(w-130), uintptr(h-80),
-			100, 35,
+			120, 35,
 			uintptr(hwnd), IDC_CANCEL_BTN, 0, 0)
 		cancelBtn = syscall.Handle(ret)
 
