@@ -123,6 +123,8 @@ const (
 	VK_V       = 0x56
 	VK_SPACE   = 0x20
 	VK_P       = 0x50
+	VK_UP      = 0x26
+	VK_DOWN    = 0x28
 
 	CF_UNICODETEXT  = 13
 	GMEM_MOVEABLE   = 0x0002
@@ -155,6 +157,8 @@ const (
 	LBN_DBLCLK           = 2
 	LB_ADDSTRING          = 0x0180
 	LB_GETCURSEL          = 0x0188
+	LB_SETCURSEL          = 0x0186
+	LB_GETCOUNT           = 0x018B
 	LB_ERR                = -1
 
 	HOTKEY_ID = 9999
@@ -292,8 +296,8 @@ func loadConfig() {
 	// Defaults
 	cfg.Hotkey.Modifiers = []string{"Ctrl", "Shift"}
 	cfg.Hotkey.Key = "Space"
-	cfg.Window.Width = 600
-	cfg.Window.Height = 350
+	cfg.Window.Width = 750
+	cfg.Window.Height = 600
 	cfg.Window.Title = "Nhập nội dung"
 
 	paths := []string{"config.json"}
@@ -739,6 +743,11 @@ func filterPrompts() {
 		pSendMessageW.Call(uintptr(pickerListHwnd), LB_ADDSTRING, 0,
 			uintptr(unsafe.Pointer(utf16Ptr(displayText))))
 		filteredIndices = append(filteredIndices, i)
+	}
+
+	// Auto-select first item so Enter works immediately after typing
+	if len(filteredIndices) > 0 {
+		pSendMessageW.Call(uintptr(pickerListHwnd), LB_SETCURSEL, 0, 0)
 	}
 }
 
@@ -1230,7 +1239,47 @@ func main() {
 			}
 		}
 
-		// Esc
+		// Picker keyboard navigation (when picker is open)
+		if m.Message == WM_KEYDOWN && pickerHwnd != 0 {
+			// Down arrow in search box → move focus to listbox
+			if m.Hwnd == pickerSearchHwnd && m.WParam == VK_DOWN {
+				count, _, _ := pSendMessageW.Call(uintptr(pickerListHwnd), LB_GETCOUNT, 0, 0)
+				if int(count) > 0 {
+					cur, _, _ := pSendMessageW.Call(uintptr(pickerListHwnd), LB_GETCURSEL, 0, 0)
+					if int(cur) == LB_ERR {
+						pSendMessageW.Call(uintptr(pickerListHwnd), LB_SETCURSEL, 0, 0)
+					}
+					pSetFocus.Call(uintptr(pickerListHwnd))
+				}
+				continue
+			}
+			// Up arrow in listbox at first item → return focus to search box
+			if m.Hwnd == pickerListHwnd && m.WParam == VK_UP {
+				cur, _, _ := pSendMessageW.Call(uintptr(pickerListHwnd), LB_GETCURSEL, 0, 0)
+				if int(cur) <= 0 {
+					pSetFocus.Call(uintptr(pickerSearchHwnd))
+					continue
+				}
+				// Otherwise fall through to native listbox Up handling
+			}
+			// Enter in listbox → insert selected prompt
+			if m.Hwnd == pickerListHwnd && m.WParam == VK_RETURN {
+				insertSelectedPrompt()
+				continue
+			}
+			// Enter in search box → insert auto-selected first prompt
+			if m.Hwnd == pickerSearchHwnd && m.WParam == VK_RETURN {
+				insertSelectedPrompt()
+				continue
+			}
+			// Esc when picker is open → close picker only (not main popup)
+			if m.WParam == VK_ESCAPE {
+				pDestroyWindow.Call(uintptr(pickerHwnd))
+				continue
+			}
+		}
+
+		// Esc (when picker is NOT open)
 		if m.Message == WM_KEYDOWN && m.WParam == VK_ESCAPE && popupVisible {
 			hidePopup()
 			continue
