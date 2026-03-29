@@ -123,6 +123,7 @@ const (
 	VK_V       = 0x56
 	VK_SPACE   = 0x20
 	VK_P       = 0x50
+	VK_A       = 0x41
 	VK_UP      = 0x26
 	VK_DOWN    = 0x28
 
@@ -149,6 +150,7 @@ const (
 	IDC_PICKER_CANCEL = 2003
 	IDC_PICKER_SEARCH = 2004
 
+	EM_SETSEL          = 0x00B1
 	EN_CHANGE          = 0x0300
 	LB_RESETCONTENT    = 0x0184
 
@@ -795,6 +797,7 @@ var (
 	popupVisible bool
 	hFont        uintptr
 	savedClip    string
+	lastDraft    string // auto-saved draft for recovery
 )
 
 func createFont() uintptr {
@@ -928,8 +931,15 @@ func showPopup() {
 	prevWindow, _, _ = pGetForegroundWindow.Call()
 	logf("Saved prev window: %d", prevWindow)
 
-	// Clear text
-	pSendMessageW.Call(uintptr(editHwnd), WM_SETTEXT, 0, uintptr(unsafe.Pointer(utf16Ptr(""))))
+	// Restore last draft if available, otherwise clear
+	if lastDraft != "" {
+		pSendMessageW.Call(uintptr(editHwnd), WM_SETTEXT, 0, uintptr(unsafe.Pointer(utf16Ptr(lastDraft))))
+		// Select all text so user can see recovered content and easily replace it
+		pSendMessageW.Call(uintptr(editHwnd), EM_SETSEL, 0, uintptr(0xFFFFFFFF))
+		logf("Draft restored (%d chars)", len(lastDraft))
+	} else {
+		pSendMessageW.Call(uintptr(editHwnd), WM_SETTEXT, 0, uintptr(unsafe.Pointer(utf16Ptr(""))))
+	}
 
 	// Center
 	sw, _, _ := pGetSystemMetrics.Call(SM_CXSCREEN)
@@ -947,6 +957,12 @@ func showPopup() {
 }
 
 func hidePopup() {
+	// Save current text as draft for recovery
+	lastDraft = getEditText()
+	if lastDraft != "" {
+		logf("Draft saved (%d chars)", len(lastDraft))
+	}
+
 	pShowWindow.Call(uintptr(mainHwnd), SW_HIDE)
 	popupVisible = false
 	if prevWindow != 0 {
@@ -1080,6 +1096,9 @@ func doOK() {
 		return
 	}
 	logf("Text: %s", text)
+
+	// Clear draft since user confirmed the text
+	lastDraft = ""
 
 	savedClip = getClipboard()
 	setClipboard(text)
@@ -1275,6 +1294,15 @@ func main() {
 			// Esc when picker is open → close picker only (not main popup)
 			if m.WParam == VK_ESCAPE {
 				pDestroyWindow.Call(uintptr(pickerHwnd))
+				continue
+			}
+		}
+
+		// Ctrl+A in edit control → select all text
+		if m.Message == WM_KEYDOWN && m.WParam == VK_A && m.Hwnd == editHwnd {
+			state, _, _ := pGetKeyState.Call(VK_CONTROL)
+			if (state & 0x8000) != 0 {
+				pSendMessageW.Call(uintptr(editHwnd), EM_SETSEL, 0, uintptr(0xFFFFFFFF))
 				continue
 			}
 		}
