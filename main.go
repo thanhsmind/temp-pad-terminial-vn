@@ -563,13 +563,16 @@ func showPromptPicker() {
 
 	if !pickerRegistered {
 		pickerClassName = utf16Ptr("VNPromptPicker")
-		var wcex WNDCLASSEXW
-		wcex.CbSize = uint32(unsafe.Sizeof(wcex))
-		wcex.LpfnWndProc = syscall.NewCallback(pickerWndProc)
-		wcex.HCursor, _, _ = pLoadCursorW.Call(0, IDC_ARROW)
-		wcex.HbrBackground = 5 + 1 // COLOR_WINDOW + 1
-		wcex.LpszClassName = pickerClassName
-		wcex.HInstance, _, _ = pGetModuleHandleW.Call(0)
+		cursor, _, _ := pLoadCursorW.Call(0, IDC_ARROW)
+		hInst, _, _ := pGetModuleHandleW.Call(0)
+		wcex := WNDCLASSEXW{
+			Size:       uint32(unsafe.Sizeof(WNDCLASSEXW{})),
+			WndProc:    syscall.NewCallback(pickerWndProc),
+			Cursor:     syscall.Handle(cursor),
+			Background: 16, // COLOR_BTNFACE + 1
+			ClassName:  pickerClassName,
+			Instance:   syscall.Handle(hInst),
+		}
 		ret, _, _ := pRegisterClassExW.Call(uintptr(unsafe.Pointer(&wcex)))
 		if ret == 0 {
 			logf("Prompts: failed to register picker window class")
