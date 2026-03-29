@@ -24,6 +24,7 @@ var (
 	user32   = syscall.NewLazyDLL("user32.dll")
 	kernel32 = syscall.NewLazyDLL("kernel32.dll")
 	gdi32    = syscall.NewLazyDLL("gdi32.dll")
+	advapi32 = syscall.NewLazyDLL("advapi32.dll")
 
 	pRegisterClassExW    = user32.NewProc("RegisterClassExW")
 	pCreateWindowExW     = user32.NewProc("CreateWindowExW")
@@ -59,6 +60,11 @@ var (
 	pSleep            = kernel32.NewProc("Sleep")
 
 	pCreateFontIndirectW = gdi32.NewProc("CreateFontIndirectW")
+
+	pRegOpenKeyExW  = advapi32.NewProc("RegOpenKeyExW")
+	pRegSetValueExW = advapi32.NewProc("RegSetValueExW")
+	pRegDeleteValueW = advapi32.NewProc("RegDeleteValueW")
+	pRegCloseKey    = advapi32.NewProc("RegCloseKey")
 )
 
 // ============================================================
@@ -133,6 +139,12 @@ const (
 	IDC_CANCEL_BTN = 1003
 
 	HOTKEY_ID = 9999
+
+	HKEY_CURRENT_USER         = 0x80000001
+	KEY_SET_VALUE             = 0x0002
+	REG_SZ                    = 1
+	ERROR_SUCCESS             = 0
+	ERROR_FILE_NOT_FOUND      = 2
 )
 
 // ============================================================
@@ -252,6 +264,7 @@ type Config struct {
 		Height int    `json:"height"`
 		Title  string `json:"title"`
 	} `json:"window"`
+	AutoStart bool `json:"auto_start"`
 }
 
 var cfg Config
@@ -282,9 +295,9 @@ func loadConfig() {
 		break
 	}
 
-	logf("Config: hotkey=%s+%s, window=%dx%d",
+	logf("Config: hotkey=%s+%s, window=%dx%d, auto_start=%v",
 		strings.Join(cfg.Hotkey.Modifiers, "+"), cfg.Hotkey.Key,
-		cfg.Window.Width, cfg.Window.Height)
+		cfg.Window.Width, cfg.Window.Height, cfg.AutoStart)
 }
 
 func getModifiers() uint32 {
@@ -322,6 +335,93 @@ func getVK() uint32 {
 			}
 		}
 		return VK_SPACE
+	}
+}
+
+// ============================================================
+// Auto-start (Windows Registry)
+// ============================================================
+
+const (
+	autoStartKeyPath  = `Software\Microsoft\Windows\CurrentVersion\Run`
+	autoStartValueName = "VNInputHelper"
+)
+
+func setAutoStart() {
+	exePath, err := os.Executable()
+	if err != nil {
+		logf("Auto-start: failed to get exe path: %v", err)
+		return
+	}
+
+	var hKey uintptr
+	r, _, e := pRegOpenKeyExW.Call(
+		HKEY_CURRENT_USER,
+		uintptr(unsafe.Pointer(utf16Ptr(autoStartKeyPath))),
+		0,
+		KEY_SET_VALUE,
+		uintptr(unsafe.Pointer(&hKey)),
+	)
+	if r != ERROR_SUCCESS {
+		logf("Auto-start: RegOpenKeyEx failed: %v", e)
+		return
+	}
+	defer pRegCloseKey.Call(hKey)
+
+	valueUTF16 := syscall.StringToUTF16(exePath)
+	dataSize := len(valueUTF16) * 2
+
+	r, _, e = pRegSetValueExW.Call(
+		hKey,
+		uintptr(unsafe.Pointer(utf16Ptr(autoStartValueName))),
+		0,
+		REG_SZ,
+		uintptr(unsafe.Pointer(&valueUTF16[0])),
+		uintptr(dataSize),
+	)
+	if r != ERROR_SUCCESS {
+		logf("Auto-start: RegSetValueEx failed: %v", e)
+		return
+	}
+
+	logf("Auto-start: registered '%s'", exePath)
+}
+
+func removeAutoStart() {
+	var hKey uintptr
+	r, _, e := pRegOpenKeyExW.Call(
+		HKEY_CURRENT_USER,
+		uintptr(unsafe.Pointer(utf16Ptr(autoStartKeyPath))),
+		0,
+		KEY_SET_VALUE,
+		uintptr(unsafe.Pointer(&hKey)),
+	)
+	if r != ERROR_SUCCESS {
+		// Key doesn't exist or can't open — nothing to remove
+		logf("Auto-start: RegOpenKeyEx for removal: %v (may be OK)", e)
+		return
+	}
+	defer pRegCloseKey.Call(hKey)
+
+	r, _, e = pRegDeleteValueW.Call(
+		hKey,
+		uintptr(unsafe.Pointer(utf16Ptr(autoStartValueName))),
+	)
+	if r != ERROR_SUCCESS && r != ERROR_FILE_NOT_FOUND {
+		logf("Auto-start: RegDeleteValue failed: %v", e)
+		return
+	}
+
+	logf("Auto-start: registry entry removed")
+}
+
+func manageAutoStart() {
+	if cfg.AutoStart {
+		logf("Auto-start: enabled, updating registry")
+		setAutoStart()
+	} else {
+		logf("Auto-start: disabled, cleaning registry")
+		removeAutoStart()
 	}
 }
 
@@ -675,6 +775,7 @@ func main() {
 
 	initLog()
 	loadConfig()
+	manageAutoStart()
 
 	hotkeyStr := strings.Join(cfg.Hotkey.Modifiers, "+") + "+" + cfg.Hotkey.Key
 
