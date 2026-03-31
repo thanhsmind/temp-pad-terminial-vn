@@ -69,6 +69,26 @@ Chỉnh file `config.json` cùng thư mục với exe:
 {"modifiers": ["Win"], "key": "Q"}
 ```
 
+## Video Convert
+
+Tab thứ 2 trong popup cho phép convert file MP4 sang các định dạng khác:
+
+- **WebM VP9** — chất lượng tốt nhất (CRF 18, libvpx-vp9, Opus audio)
+- **MP4 H.265** — re-encode HEVC chất lượng cao (CRF 18, preset slow)
+- **MP3 320kbps** — extract audio chất lượng cao
+
+### Yêu cầu
+
+Đặt `ffmpeg.exe` cạnh file `vn-input-helper.exe`. Download tại [gyan.dev](https://www.gyan.dev/ffmpeg/builds/) (chọn bản **"full"** để có đầy đủ codec libx265, libvpx, libopus).
+
+### Cách dùng
+
+1. Mở popup bằng phím tắt → chọn tab **Video Convert**
+2. Bấm **Chọn file MP4** để chọn file nguồn
+3. Bấm nút convert mong muốn (WebM VP9 / MP4 H.265 / MP3)
+4. Chọn nơi lưu file output qua dialog Save As
+5. Đợi progress bar chạy xong → "Hoàn thành!"
+
 ## Lưu ý
 
 - App tự backup clipboard trước khi paste và restore lại sau 500ms

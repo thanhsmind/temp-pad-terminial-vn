@@ -5,8 +5,11 @@ import (
 	"encoding/json"
 	"fmt"
 	"os"
+	"os/exec"
 	"path/filepath"
+	"regexp"
 	"runtime"
+	"strconv"
 	"strings"
 	"syscall"
 	"unsafe"
@@ -25,7 +28,9 @@ var (
 	user32   = syscall.NewLazyDLL("user32.dll")
 	kernel32 = syscall.NewLazyDLL("kernel32.dll")
 	gdi32    = syscall.NewLazyDLL("gdi32.dll")
-	advapi32 = syscall.NewLazyDLL("advapi32.dll")
+	advapi32  = syscall.NewLazyDLL("advapi32.dll")
+	comctl32  = syscall.NewLazyDLL("comctl32.dll")
+	comdlg32  = syscall.NewLazyDLL("comdlg32.dll")
 
 	pRegisterClassExW    = user32.NewProc("RegisterClassExW")
 	pCreateWindowExW     = user32.NewProc("CreateWindowExW")
@@ -68,6 +73,15 @@ var (
 	pRegSetValueExW = advapi32.NewProc("RegSetValueExW")
 	pRegDeleteValueW = advapi32.NewProc("RegDeleteValueW")
 	pRegCloseKey    = advapi32.NewProc("RegCloseKey")
+
+	pInitCommonControlsEx = comctl32.NewProc("InitCommonControlsEx")
+
+	pGetOpenFileNameW = comdlg32.NewProc("GetOpenFileNameW")
+	pGetSaveFileNameW = comdlg32.NewProc("GetSaveFileNameW")
+
+	pPostMessageW    = user32.NewProc("PostMessageW")
+	pEnableWindow    = user32.NewProc("EnableWindow")
+	pIsWindowVisible = user32.NewProc("IsWindowVisible")
 )
 
 // ============================================================
@@ -150,6 +164,16 @@ const (
 	IDC_PICKER_CANCEL = 2003
 	IDC_PICKER_SEARCH = 2004
 
+	IDC_TAB_CTRL       = 3000
+	IDC_CONV_FILE_BTN  = 3001
+	IDC_CONV_FILE_LABEL = 3002
+	IDC_CONV_WEBM_BTN  = 3003
+	IDC_CONV_H265_BTN  = 3004
+	IDC_CONV_MP3_BTN   = 3005
+	IDC_CONV_PROGRESS  = 3006
+	IDC_CONV_STATUS    = 3007
+	IDC_CONV_CANCEL_BTN = 3008
+
 	EM_SETSEL          = 0x00B1
 	EN_CHANGE          = 0x0300
 	LB_RESETCONTENT    = 0x0184
@@ -164,6 +188,39 @@ const (
 	LB_ERR                = -1
 
 	HOTKEY_ID = 9999
+
+	// Tab control
+	WM_NOTIFY      = 0x004E
+	WM_APP         = 0x8000
+	TCM_INSERTITEM = 0x133E // TCM_INSERTITEMW
+	TCM_GETCURSEL  = 0x130B
+	TCN_SELCHANGE  = -552 // (0xFFFFFDD8 as int32)
+	TCS_FIXEDWIDTH = 0x0400
+
+	// Progress bar
+	PBM_SETRANGE = 0x0401
+	PBM_SETPOS   = 0x0402
+	PBM_SETMARQUEE = 0x040A
+	PBS_SMOOTH   = 0x01
+	PBS_MARQUEE  = 0x08
+
+	// Common controls
+	ICC_TAB_CLASSES      = 0x00000008
+	ICC_PROGRESS_CLASS   = 0x00000020
+
+	// File dialog
+	OFN_FILEMUSTEXIST  = 0x00001000
+	OFN_PATHMUSTEXIST  = 0x00000800
+	OFN_OVERWRITEPROMPT = 0x00000002
+	OFN_NOCHANGEDIR    = 0x00000008
+
+	// Static control
+	SS_LEFT    = 0x00000000
+	SS_PATHELLIPSIS = 0x00008000
+
+	// Custom messages for converter
+	WM_CONVERT_PROGRESS = WM_APP + 1
+	WM_CONVERT_DONE     = WM_APP + 2
 
 	HKEY_CURRENT_USER         = 0x80000001
 	KEY_SET_VALUE             = 0x0002
@@ -213,6 +270,58 @@ type KEYBDINPUT64 struct {
 	DwFlags     uint32
 	Time        uint32
 	DwExtraInfo uintptr
+}
+
+type INITCOMMONCONTROLSEX struct {
+	Size uint32
+	ICC  uint32
+}
+
+type NMHDR struct {
+	HwndFrom uintptr
+	IdFrom   uintptr
+	Code     int32
+	_pad     int32 // alignment padding on 64-bit
+}
+
+type TCITEMW struct {
+	Mask       uint32
+	State      uint32
+	StateMask  uint32
+	Text       *uint16
+	TextMax    int32
+	Image      int32
+	LParam     uintptr
+}
+
+// OPENFILENAMEW — 64-bit aligned struct for file dialogs
+type OPENFILENAMEW struct {
+	StructSize      uint32
+	_pad1           uint32
+	Owner           uintptr
+	Instance        uintptr
+	Filter          *uint16
+	CustomFilter    *uint16
+	MaxCustFilter   uint32
+	FilterIndex     uint32
+	File            *uint16
+	MaxFile         uint32
+	_pad2           uint32
+	FileTitle       *uint16
+	MaxFileTitle    uint32
+	_pad3           uint32
+	InitialDir      *uint16
+	Title           *uint16
+	Flags           uint32
+	FileOffset      uint16
+	FileExtension   uint16
+	DefExt          *uint16
+	CustData        uintptr
+	Hook            uintptr
+	TemplateName    *uint16
+	PvReserved      uintptr
+	DwReserved      uint32
+	FlagsEx         uint32
 }
 
 // ============================================================
@@ -798,6 +907,26 @@ var (
 	hFont        uintptr
 	savedClip    string
 	lastDraft    string // auto-saved draft for recovery
+
+	// Tab control
+	tabHwnd       syscall.Handle
+	tab1Controls  []syscall.Handle
+	tab2Controls  []syscall.Handle
+	currentTab    int
+
+	// Converter controls
+	convFileLabelHwnd syscall.Handle
+	convProgressHwnd  syscall.Handle
+	convStatusHwnd    syscall.Handle
+	convWebmBtn       syscall.Handle
+	convH265Btn       syscall.Handle
+	convMp3Btn        syscall.Handle
+	convCancelBtn     syscall.Handle
+
+	// Converter state
+	selectedMP4   string
+	converting    bool
+	ffmpegCmd     *exec.Cmd
 )
 
 func createFont() uintptr {
@@ -818,6 +947,332 @@ func createFont() uintptr {
 }
 
 // ============================================================
+// File dialogs
+// ============================================================
+
+func openMP4File() {
+	fileBuf := make([]uint16, 260) // MAX_PATH
+	filter := syscall.StringToUTF16("MP4 Files (*.mp4)\x00*.mp4\x00All Files (*.*)\x00*.*\x00\x00")
+
+	ofn := OPENFILENAMEW{
+		StructSize: uint32(unsafe.Sizeof(OPENFILENAMEW{})),
+		Owner:      uintptr(mainHwnd),
+		Filter:     &filter[0],
+		File:       &fileBuf[0],
+		MaxFile:    uint32(len(fileBuf)),
+		Flags:      OFN_FILEMUSTEXIST | OFN_PATHMUSTEXIST | OFN_NOCHANGEDIR,
+	}
+
+	ret, _, _ := pGetOpenFileNameW.Call(uintptr(unsafe.Pointer(&ofn)))
+	if ret == 0 {
+		logf("Open file dialog cancelled")
+		return
+	}
+
+	selectedMP4 = syscall.UTF16ToString(fileBuf)
+	logf("Selected MP4: %s", selectedMP4)
+
+	// Display basename in label
+	basename := filepath.Base(selectedMP4)
+	pSendMessageW.Call(uintptr(convFileLabelHwnd), WM_SETTEXT, 0,
+		uintptr(unsafe.Pointer(utf16Ptr(basename))))
+
+	// Clear previous status
+	pSendMessageW.Call(uintptr(convStatusHwnd), WM_SETTEXT, 0,
+		uintptr(unsafe.Pointer(utf16Ptr(""))))
+	pSendMessageW.Call(uintptr(convProgressHwnd), PBM_SETPOS, 0, 0)
+}
+
+func showSaveDialog(defaultName string, filterDesc string, filterExt string, defExt string) string {
+	fileBuf := make([]uint16, 260)
+	// Pre-fill with default name
+	defNameUTF16 := syscall.StringToUTF16(defaultName)
+	copy(fileBuf, defNameUTF16)
+
+	filterStr := syscall.StringToUTF16(filterDesc + "\x00*." + filterExt + "\x00All Files (*.*)\x00*.*\x00\x00")
+	defExtUTF16 := utf16Ptr(defExt)
+
+	ofn := OPENFILENAMEW{
+		StructSize: uint32(unsafe.Sizeof(OPENFILENAMEW{})),
+		Owner:      uintptr(mainHwnd),
+		Filter:     &filterStr[0],
+		File:       &fileBuf[0],
+		MaxFile:    uint32(len(fileBuf)),
+		Flags:      OFN_OVERWRITEPROMPT | OFN_PATHMUSTEXIST | OFN_NOCHANGEDIR,
+		DefExt:     defExtUTF16,
+	}
+
+	ret, _, _ := pGetSaveFileNameW.Call(uintptr(unsafe.Pointer(&ofn)))
+	if ret == 0 {
+		logf("Save dialog cancelled")
+		return ""
+	}
+
+	path := syscall.UTF16ToString(fileBuf)
+	logf("Save path: %s", path)
+	return path
+}
+
+// ============================================================
+// Converter helpers
+// ============================================================
+
+func enableConvertButtons(enable bool) {
+	val := uintptr(1) // TRUE = enable
+	if !enable {
+		val = 0
+	}
+	pEnableWindow.Call(uintptr(convWebmBtn), val)
+	pEnableWindow.Call(uintptr(convH265Btn), val)
+	pEnableWindow.Call(uintptr(convMp3Btn), val)
+}
+
+// ============================================================
+// FFmpeg conversion
+// ============================================================
+
+func locateFFmpeg() string {
+	exePath, err := os.Executable()
+	if err != nil {
+		logf("Cannot get exe path: %v", err)
+		return ""
+	}
+	ffmpegPath := filepath.Join(filepath.Dir(exePath), "ffmpeg.exe")
+	if _, err := os.Stat(ffmpegPath); err != nil {
+		logf("ffmpeg.exe not found at %s", ffmpegPath)
+		return ""
+	}
+	return ffmpegPath
+}
+
+func startConversion(format string) {
+	if converting {
+		logf("Conversion already in progress, ignoring")
+		return
+	}
+	if selectedMP4 == "" {
+		msgBox("Video Convert", "Vui lòng chọn file MP4 trước!", MB_OK|MB_ICONINFORMATION)
+		return
+	}
+
+	ffmpegPath := locateFFmpeg()
+	if ffmpegPath == "" {
+		msgBox("Video Convert", "Không tìm thấy ffmpeg.exe.\nVui lòng đặt ffmpeg.exe cạnh vn-input-helper.exe", MB_OK|MB_ICONERROR)
+		return
+	}
+
+	// Determine output format details
+	var filterDesc, filterExt, defExt string
+	baseName := strings.TrimSuffix(filepath.Base(selectedMP4), filepath.Ext(selectedMP4))
+	var defaultName string
+
+	switch format {
+	case "webm":
+		filterDesc = "WebM Files (*.webm)"
+		filterExt = "webm"
+		defExt = "webm"
+		defaultName = baseName + ".webm"
+	case "h265":
+		filterDesc = "MP4 Files (*.mp4)"
+		filterExt = "mp4"
+		defExt = "mp4"
+		defaultName = baseName + "_h265.mp4"
+	case "mp3":
+		filterDesc = "MP3 Files (*.mp3)"
+		filterExt = "mp3"
+		defExt = "mp3"
+		defaultName = baseName + ".mp3"
+	default:
+		logf("Unknown format: %s", format)
+		return
+	}
+
+	// Show Save As dialog
+	outputPath := showSaveDialog(defaultName, filterDesc, filterExt, defExt)
+	if outputPath == "" {
+		return // User cancelled
+	}
+
+	// Start conversion
+	converting = true
+	enableConvertButtons(false)
+	pSendMessageW.Call(uintptr(convProgressHwnd), PBM_SETPOS, 0, 0)
+	pSendMessageW.Call(uintptr(convStatusHwnd), WM_SETTEXT, 0,
+		uintptr(unsafe.Pointer(utf16Ptr("Đang chuẩn bị convert..."))))
+	pShowWindow.Call(uintptr(convCancelBtn), SW_SHOW)
+
+	logf("Starting conversion: %s -> %s (format: %s)", selectedMP4, outputPath, format)
+	go runFFmpeg(ffmpegPath, selectedMP4, outputPath, format)
+}
+
+func cancelConversion() {
+	if !converting || ffmpegCmd == nil {
+		return
+	}
+	logf("Cancelling conversion...")
+	if ffmpegCmd.Process != nil {
+		ffmpegCmd.Process.Kill()
+	}
+}
+
+func runFFmpeg(ffmpegPath, input, output, format string) {
+	// Build args based on format
+	var args []string
+	switch format {
+	case "webm":
+		args = []string{
+			"-i", input,
+			"-c:v", "libvpx-vp9",
+			"-crf", "18",
+			"-b:v", "0",
+			"-cpu-used", "1",
+			"-row-mt", "1",
+			"-c:a", "libopus",
+			"-b:a", "192k",
+			"-progress", "pipe:1",
+			"-y",
+			output,
+		}
+	case "h265":
+		args = []string{
+			"-i", input,
+			"-c:v", "libx265",
+			"-crf", "18",
+			"-preset", "slow",
+			"-pix_fmt", "yuv420p",
+			"-tag:v", "hvc1",
+			"-c:a", "aac",
+			"-b:a", "256k",
+			"-movflags", "+faststart",
+			"-progress", "pipe:1",
+			"-y",
+			output,
+		}
+	case "mp3":
+		args = []string{
+			"-i", input,
+			"-vn",
+			"-c:a", "libmp3lame",
+			"-b:a", "320k",
+			"-progress", "pipe:1",
+			"-y",
+			output,
+		}
+	}
+
+	cmd := exec.Command(ffmpegPath, args...)
+	ffmpegCmd = cmd
+
+	// Pipe stdout for progress (-progress pipe:1)
+	stdout, err := cmd.StdoutPipe()
+	if err != nil {
+		logf("Failed to create stdout pipe: %v", err)
+		pPostMessageW.Call(uintptr(mainHwnd), WM_CONVERT_DONE, 0, 0)
+		return
+	}
+
+	// Pipe stderr for duration info
+	stderr, err := cmd.StderrPipe()
+	if err != nil {
+		logf("Failed to create stderr pipe: %v", err)
+		pPostMessageW.Call(uintptr(mainHwnd), WM_CONVERT_DONE, 0, 0)
+		return
+	}
+
+	if err := cmd.Start(); err != nil {
+		logf("Failed to start ffmpeg: %v", err)
+		pPostMessageW.Call(uintptr(mainHwnd), WM_CONVERT_DONE, 0, 0)
+		return
+	}
+
+	// Parse total duration from stderr in a separate goroutine
+	var totalDurationMs int64
+	durationRe := regexp.MustCompile(`Duration:\s*(\d{2}):(\d{2}):(\d{2})\.(\d{2})`)
+	go func() {
+		scanner := bufio.NewScanner(stderr)
+		for scanner.Scan() {
+			line := scanner.Text()
+			if m := durationRe.FindStringSubmatch(line); m != nil && totalDurationMs == 0 {
+				h, _ := strconv.ParseInt(m[1], 10, 64)
+				min, _ := strconv.ParseInt(m[2], 10, 64)
+				s, _ := strconv.ParseInt(m[3], 10, 64)
+				cs, _ := strconv.ParseInt(m[4], 10, 64)
+				totalDurationMs = (h*3600+min*60+s)*1000 + cs*10
+				logf("Total duration: %dms", totalDurationMs)
+			}
+		}
+	}()
+
+	// Parse progress from stdout (-progress pipe:1 format)
+	outTimeRe := regexp.MustCompile(`out_time_us=(\d+)`)
+	progressRe := regexp.MustCompile(`progress=(\w+)`)
+	scanner := bufio.NewScanner(stdout)
+	lastPercent := 0
+
+	for scanner.Scan() {
+		line := scanner.Text()
+
+		if m := outTimeRe.FindStringSubmatch(line); m != nil {
+			outTimeUs, _ := strconv.ParseInt(m[1], 10, 64)
+			outTimeMs := outTimeUs / 1000
+			if totalDurationMs > 0 {
+				percent := int(outTimeMs * 100 / totalDurationMs)
+				if percent > 100 {
+					percent = 100
+				}
+				if percent != lastPercent {
+					lastPercent = percent
+					pPostMessageW.Call(uintptr(mainHwnd), WM_CONVERT_PROGRESS, uintptr(percent), 0)
+				}
+			}
+		}
+
+		if m := progressRe.FindStringSubmatch(line); m != nil && m[1] == "end" {
+			break
+		}
+	}
+
+	err = cmd.Wait()
+	ffmpegCmd = nil
+
+	if err != nil {
+		logf("FFmpeg error: %v", err)
+		// Clean up partial output file
+		os.Remove(output)
+		pPostMessageW.Call(uintptr(mainHwnd), WM_CONVERT_DONE, 0, 0)
+	} else {
+		pPostMessageW.Call(uintptr(mainHwnd), WM_CONVERT_DONE, 1, 0)
+	}
+}
+
+// ============================================================
+// Tab switching
+// ============================================================
+
+func switchTab(index int) {
+	currentTab = index
+	show := func(controls []syscall.Handle) {
+		for _, c := range controls {
+			pShowWindow.Call(uintptr(c), SW_SHOW)
+		}
+	}
+	hide := func(controls []syscall.Handle) {
+		for _, c := range controls {
+			pShowWindow.Call(uintptr(c), SW_HIDE)
+		}
+	}
+	if index == 0 {
+		show(tab1Controls)
+		hide(tab2Controls)
+		pSetFocus.Call(uintptr(editHwnd))
+	} else {
+		hide(tab1Controls)
+		show(tab2Controls)
+	}
+	logf("Switched to tab %d", index)
+}
+
+// ============================================================
 // Window Proc
 // ============================================================
 
@@ -829,54 +1284,178 @@ func wndProc(hwnd syscall.Handle, msg uint32, wParam, lParam uintptr) uintptr {
 		w := cfg.Window.Width
 		h := cfg.Window.Height
 
-		// Edit control
+		// Font (create early so we can apply to all controls)
+		hFont = createFont()
+
+		// Tab control at top of window
 		ret, _, _ := pCreateWindowExW.Call(
+			0,
+			uintptr(unsafe.Pointer(utf16Ptr("SysTabControl32"))),
+			0,
+			WS_CHILD|WS_VISIBLE,
+			0, 0,
+			uintptr(w-16), uintptr(h-8),
+			uintptr(hwnd), IDC_TAB_CTRL, 0, 0)
+		tabHwnd = syscall.Handle(ret)
+		logf("tabHwnd = %d", tabHwnd)
+		pSendMessageW.Call(uintptr(tabHwnd), WM_SETFONT, hFont, 1)
+
+		// Insert tab items
+		tcif := uint32(0x0001) // TCIF_TEXT
+		tab1Text := utf16Ptr("VN Input")
+		tab1Item := TCITEMW{Mask: tcif, Text: tab1Text}
+		pSendMessageW.Call(uintptr(tabHwnd), TCM_INSERTITEM, 0, uintptr(unsafe.Pointer(&tab1Item)))
+
+		tab2Text := utf16Ptr("Video Convert")
+		tab2Item := TCITEMW{Mask: tcif, Text: tab2Text}
+		pSendMessageW.Call(uintptr(tabHwnd), TCM_INSERTITEM, 1, uintptr(unsafe.Pointer(&tab2Item)))
+
+		// Tab content area (offset for tab header ~30px)
+		tabTop := uintptr(35)
+		contentW := uintptr(w - 40)
+		contentH := uintptr(h - 50)
+
+		// ---- Tab 1: VN Input controls ----
+		ret, _, _ = pCreateWindowExW.Call(
 			WS_EX_CLIENTEDGE,
 			uintptr(unsafe.Pointer(utf16Ptr("EDIT"))),
 			0,
 			WS_CHILD|WS_VISIBLE|WS_VSCROLL|WS_TABSTOP|ES_MULTILINE|ES_AUTOVSCROLL|ES_WANTRETURN,
-			10, 10,
-			uintptr(w-40), uintptr(h-100),
+			10, tabTop,
+			contentW, contentH-90,
 			uintptr(hwnd), IDC_EDIT_CTRL, 0, 0)
 		editHwnd = syscall.Handle(ret)
 		logf("editHwnd = %d", editHwnd)
 
-		// OK button
 		ret, _, _ = pCreateWindowExW.Call(0,
 			uintptr(unsafe.Pointer(utf16Ptr("BUTTON"))),
 			uintptr(unsafe.Pointer(utf16Ptr("OK (Ctrl+Enter)"))),
 			WS_CHILD|WS_VISIBLE|WS_TABSTOP|BS_DEFPUSHBUTTON,
-			uintptr(w-300), uintptr(h-80),
+			uintptr(w-316), contentH-50+tabTop,
 			160, 35,
 			uintptr(hwnd), IDC_OK_BTN, 0, 0)
 		okBtn = syscall.Handle(ret)
 
-		// Cancel button
 		ret, _, _ = pCreateWindowExW.Call(0,
 			uintptr(unsafe.Pointer(utf16Ptr("BUTTON"))),
 			uintptr(unsafe.Pointer(utf16Ptr("Hủy (Esc)"))),
 			WS_CHILD|WS_VISIBLE|WS_TABSTOP|BS_PUSHBUTTON,
-			uintptr(w-130), uintptr(h-80),
+			uintptr(w-146), contentH-50+tabTop,
 			120, 35,
 			uintptr(hwnd), IDC_CANCEL_BTN, 0, 0)
 		cancelBtn = syscall.Handle(ret)
 
-		// Prompts button
 		ret, _, _ = pCreateWindowExW.Call(0,
 			uintptr(unsafe.Pointer(utf16Ptr("BUTTON"))),
 			uintptr(unsafe.Pointer(utf16Ptr("Prompts"))),
 			WS_CHILD|WS_VISIBLE|WS_TABSTOP|BS_PUSHBUTTON,
-			10, uintptr(h-80),
+			10, contentH-50+tabTop,
 			100, 35,
 			uintptr(hwnd), IDC_PROMPTS_BTN, 0, 0)
 		promptsBtn = syscall.Handle(ret)
 
-		// Font
-		hFont = createFont()
-		pSendMessageW.Call(uintptr(editHwnd), WM_SETFONT, hFont, 1)
-		pSendMessageW.Call(uintptr(okBtn), WM_SETFONT, hFont, 1)
-		pSendMessageW.Call(uintptr(cancelBtn), WM_SETFONT, hFont, 1)
-		pSendMessageW.Call(uintptr(promptsBtn), WM_SETFONT, hFont, 1)
+		tab1Controls = []syscall.Handle{editHwnd, okBtn, cancelBtn, promptsBtn}
+
+		// Apply font to Tab 1 controls
+		for _, c := range tab1Controls {
+			pSendMessageW.Call(uintptr(c), WM_SETFONT, hFont, 1)
+		}
+
+		// ---- Tab 2: Video Convert controls ----
+		btnY := tabTop + 5
+
+		// "Chọn file MP4" button
+		ret, _, _ = pCreateWindowExW.Call(0,
+			uintptr(unsafe.Pointer(utf16Ptr("BUTTON"))),
+			uintptr(unsafe.Pointer(utf16Ptr("Chọn file MP4..."))),
+			WS_CHILD|WS_TABSTOP|BS_PUSHBUTTON,
+			10, btnY,
+			160, 35,
+			uintptr(hwnd), IDC_CONV_FILE_BTN, 0, 0)
+		convFileBtn := syscall.Handle(ret)
+
+		// File name label
+		ret, _, _ = pCreateWindowExW.Call(0,
+			uintptr(unsafe.Pointer(utf16Ptr("STATIC"))),
+			uintptr(unsafe.Pointer(utf16Ptr("Chưa chọn file"))),
+			WS_CHILD|SS_LEFT|SS_PATHELLIPSIS,
+			180, btnY+8,
+			contentW-170, 22,
+			uintptr(hwnd), IDC_CONV_FILE_LABEL, 0, 0)
+		convFileLabelHwnd = syscall.Handle(ret)
+
+		// Convert buttons row
+		convBtnY := btnY + 55
+		ret, _, _ = pCreateWindowExW.Call(0,
+			uintptr(unsafe.Pointer(utf16Ptr("BUTTON"))),
+			uintptr(unsafe.Pointer(utf16Ptr("→ WebM VP9"))),
+			WS_CHILD|WS_TABSTOP|BS_PUSHBUTTON,
+			10, convBtnY,
+			160, 40,
+			uintptr(hwnd), IDC_CONV_WEBM_BTN, 0, 0)
+		convWebmBtn = syscall.Handle(ret)
+
+		ret, _, _ = pCreateWindowExW.Call(0,
+			uintptr(unsafe.Pointer(utf16Ptr("BUTTON"))),
+			uintptr(unsafe.Pointer(utf16Ptr("→ MP4 H.265"))),
+			WS_CHILD|WS_TABSTOP|BS_PUSHBUTTON,
+			180, convBtnY,
+			160, 40,
+			uintptr(hwnd), IDC_CONV_H265_BTN, 0, 0)
+		convH265Btn = syscall.Handle(ret)
+
+		ret, _, _ = pCreateWindowExW.Call(0,
+			uintptr(unsafe.Pointer(utf16Ptr("BUTTON"))),
+			uintptr(unsafe.Pointer(utf16Ptr("→ MP3 320kbps"))),
+			WS_CHILD|WS_TABSTOP|BS_PUSHBUTTON,
+			350, convBtnY,
+			160, 40,
+			uintptr(hwnd), IDC_CONV_MP3_BTN, 0, 0)
+		convMp3Btn = syscall.Handle(ret)
+
+		// Progress bar
+		progressY := convBtnY + 60
+		ret, _, _ = pCreateWindowExW.Call(0,
+			uintptr(unsafe.Pointer(utf16Ptr("msctls_progress32"))),
+			0,
+			WS_CHILD|PBS_SMOOTH,
+			10, progressY,
+			contentW, 25,
+			uintptr(hwnd), IDC_CONV_PROGRESS, 0, 0)
+		convProgressHwnd = syscall.Handle(ret)
+		// Set range 0-100
+		pSendMessageW.Call(uintptr(convProgressHwnd), PBM_SETRANGE, 0, uintptr(100<<16))
+
+		// Status label
+		ret, _, _ = pCreateWindowExW.Call(0,
+			uintptr(unsafe.Pointer(utf16Ptr("STATIC"))),
+			uintptr(unsafe.Pointer(utf16Ptr(""))),
+			WS_CHILD|SS_LEFT,
+			10, progressY+30,
+			contentW, 25,
+			uintptr(hwnd), IDC_CONV_STATUS, 0, 0)
+		convStatusHwnd = syscall.Handle(ret)
+
+		// Cancel conversion button
+		ret, _, _ = pCreateWindowExW.Call(0,
+			uintptr(unsafe.Pointer(utf16Ptr("BUTTON"))),
+			uintptr(unsafe.Pointer(utf16Ptr("Hủy convert"))),
+			WS_CHILD|WS_TABSTOP|BS_PUSHBUTTON,
+			10, progressY+60,
+			130, 35,
+			uintptr(hwnd), IDC_CONV_CANCEL_BTN, 0, 0)
+		convCancelBtn = syscall.Handle(ret)
+
+		tab2Controls = []syscall.Handle{convFileBtn, convFileLabelHwnd, convWebmBtn, convH265Btn, convMp3Btn, convProgressHwnd, convStatusHwnd, convCancelBtn}
+
+		// Apply font to Tab 2 controls
+		for _, c := range tab2Controls {
+			pSendMessageW.Call(uintptr(c), WM_SETFONT, hFont, 1)
+		}
+
+		// Initially show Tab 1, hide Tab 2
+		currentTab = 0
+		switchTab(0)
 
 		pShowWindow.Call(uintptr(hwnd), SW_HIDE)
 		logf("Window initialized and hidden")
@@ -889,6 +1468,14 @@ func wndProc(hwnd syscall.Handle, msg uint32, wParam, lParam uintptr) uintptr {
 		}
 		return 0
 
+	case WM_NOTIFY:
+		nmhdr := (*NMHDR)(unsafe.Pointer(lParam))
+		if nmhdr.Code == TCN_SELCHANGE {
+			sel, _, _ := pSendMessageW.Call(uintptr(tabHwnd), TCM_GETCURSEL, 0, 0)
+			switchTab(int(sel))
+		}
+		return 0
+
 	case WM_COMMAND:
 		id := int(wParam & 0xFFFF)
 		switch id {
@@ -898,6 +1485,46 @@ func wndProc(hwnd syscall.Handle, msg uint32, wParam, lParam uintptr) uintptr {
 			hidePopup()
 		case IDC_PROMPTS_BTN:
 			showPromptPicker()
+		case IDC_CONV_FILE_BTN:
+			openMP4File()
+		case IDC_CONV_WEBM_BTN:
+			startConversion("webm")
+		case IDC_CONV_H265_BTN:
+			startConversion("h265")
+		case IDC_CONV_MP3_BTN:
+			startConversion("mp3")
+		case IDC_CONV_CANCEL_BTN:
+			cancelConversion()
+		}
+		return 0
+
+	case WM_CONVERT_PROGRESS:
+		percent := int(wParam)
+		pSendMessageW.Call(uintptr(convProgressHwnd), PBM_SETPOS, uintptr(percent), 0)
+		pSendMessageW.Call(uintptr(convStatusHwnd), WM_SETTEXT, 0,
+			uintptr(unsafe.Pointer(utf16Ptr(fmt.Sprintf("Đang convert... %d%%", percent)))))
+		return 0
+
+	case WM_CONVERT_DONE:
+		success := int(wParam)
+		converting = false
+		enableConvertButtons(true)
+		pShowWindow.Call(uintptr(convCancelBtn), SW_HIDE)
+		if success == 1 {
+			pSendMessageW.Call(uintptr(convProgressHwnd), PBM_SETPOS, 100, 0)
+			pSendMessageW.Call(uintptr(convStatusHwnd), WM_SETTEXT, 0,
+				uintptr(unsafe.Pointer(utf16Ptr("Hoàn thành!"))))
+			logf("Conversion completed successfully")
+		} else {
+			pSendMessageW.Call(uintptr(convProgressHwnd), PBM_SETPOS, 0, 0)
+			errMsg := "Lỗi khi convert!"
+			if lParam != 0 {
+				// lParam contains pointer to error string
+				errMsg = fmt.Sprintf("Lỗi: convert thất bại")
+			}
+			pSendMessageW.Call(uintptr(convStatusHwnd), WM_SETTEXT, 0,
+				uintptr(unsafe.Pointer(utf16Ptr(errMsg))))
+			logf("Conversion failed")
 		}
 		return 0
 
@@ -1166,6 +1793,18 @@ func main() {
 	loadConfig()
 	manageAutoStart()
 
+	// Initialize common controls (tab control, progress bar)
+	icc := INITCOMMONCONTROLSEX{
+		Size: uint32(unsafe.Sizeof(INITCOMMONCONTROLSEX{})),
+		ICC:  ICC_TAB_CLASSES | ICC_PROGRESS_CLASS,
+	}
+	ret0, _, err0 := pInitCommonControlsEx.Call(uintptr(unsafe.Pointer(&icc)))
+	if ret0 == 0 {
+		logf("InitCommonControlsEx failed: %v", err0)
+	} else {
+		logf("InitCommonControlsEx OK")
+	}
+
 	hotkeyStr := strings.Join(cfg.Hotkey.Modifiers, "+") + "+" + cfg.Hotkey.Key
 
 	hInst, _, _ := pGetModuleHandleW.Call(0)
@@ -1250,7 +1889,7 @@ func main() {
 		}
 
 		// Ctrl+P to open prompt picker
-		if m.Message == WM_KEYDOWN && m.WParam == VK_P && popupVisible && pickerHwnd == 0 {
+		if m.Message == WM_KEYDOWN && m.WParam == VK_P && popupVisible && pickerHwnd == 0 && currentTab == 0 {
 			state, _, _ := pGetKeyState.Call(VK_CONTROL)
 			if (state & 0x8000) != 0 {
 				showPromptPicker()
