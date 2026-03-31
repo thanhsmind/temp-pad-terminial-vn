@@ -950,9 +950,25 @@ func createFont() uintptr {
 // File dialogs
 // ============================================================
 
+// makeFilterUTF16 builds a NUL-separated UTF16 filter string for file dialogs.
+// Each pair is (description, pattern). The result is double-NUL terminated.
+// syscall.StringToUTF16 cannot be used because it panics on embedded NUL bytes.
+func makeFilterUTF16(pairs ...string) []uint16 {
+	var result []uint16
+	for _, s := range pairs {
+		u, _ := syscall.UTF16FromString(s)
+		// UTF16FromString appends a NUL terminator, which is exactly what we need
+		// as the separator between filter parts
+		result = append(result, u...)
+	}
+	// Double-NUL terminator (one already from the last string, add another)
+	result = append(result, 0)
+	return result
+}
+
 func openMP4File() {
 	fileBuf := make([]uint16, 260) // MAX_PATH
-	filter := syscall.StringToUTF16("MP4 Files (*.mp4)\x00*.mp4\x00All Files (*.*)\x00*.*\x00\x00")
+	filter := makeFilterUTF16("MP4 Files (*.mp4)", "*.mp4", "All Files (*.*)", "*.*")
 
 	ofn := OPENFILENAMEW{
 		StructSize: uint32(unsafe.Sizeof(OPENFILENAMEW{})),
@@ -986,10 +1002,10 @@ func openMP4File() {
 func showSaveDialog(defaultName string, filterDesc string, filterExt string, defExt string) string {
 	fileBuf := make([]uint16, 260)
 	// Pre-fill with default name
-	defNameUTF16 := syscall.StringToUTF16(defaultName)
+	defNameUTF16, _ := syscall.UTF16FromString(defaultName)
 	copy(fileBuf, defNameUTF16)
 
-	filterStr := syscall.StringToUTF16(filterDesc + "\x00*." + filterExt + "\x00All Files (*.*)\x00*.*\x00\x00")
+	filterStr := makeFilterUTF16(filterDesc, "*."+filterExt, "All Files (*.*)", "*.*")
 	defExtUTF16 := utf16Ptr(defExt)
 
 	ofn := OPENFILENAMEW{
