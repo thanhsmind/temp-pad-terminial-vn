@@ -100,6 +100,7 @@ const (
 	WS_VISIBLE          = 0x10000000
 	WS_TABSTOP          = 0x00010000
 	WS_VSCROLL          = 0x00200000
+	WS_CLIPSIBLINGS     = 0x04000000
 
 	WS_EX_TOPMOST    = 0x00000008
 	WS_EX_CLIENTEDGE = 0x00000200
@@ -194,7 +195,7 @@ const (
 	WM_APP         = 0x8000
 	TCM_INSERTITEM = 0x133E // TCM_INSERTITEMW
 	TCM_GETCURSEL  = 0x130B
-	TCN_SELCHANGE  = -552 // (0xFFFFFDD8 as int32)
+	TCN_SELCHANGE  = -551 // TCN_FIRST - 1
 	TCS_FIXEDWIDTH = 0x0400
 
 	// Progress bar
@@ -1303,14 +1304,19 @@ func wndProc(hwnd syscall.Handle, msg uint32, wParam, lParam uintptr) uintptr {
 		// Font (create early so we can apply to all controls)
 		hFont = createFont()
 
-		// Tab control at top of window
+		// Client area is smaller than window size due to title bar and borders
+		// WS_OVERLAPPED|WS_CAPTION|WS_SYSMENU: titlebar ~31px, borders ~8px
+		clientW := w - 16  // approximate client width
+		clientH := h - 62  // approximate client height (subtract title bar + borders)
+
+		// Tab control fills the client area
 		ret, _, _ := pCreateWindowExW.Call(
 			0,
 			uintptr(unsafe.Pointer(utf16Ptr("SysTabControl32"))),
 			0,
-			WS_CHILD|WS_VISIBLE,
+			WS_CHILD|WS_VISIBLE|WS_CLIPSIBLINGS,
 			0, 0,
-			uintptr(w-16), uintptr(h-8),
+			uintptr(clientW), uintptr(clientH),
 			uintptr(hwnd), IDC_TAB_CTRL, 0, 0)
 		tabHwnd = syscall.Handle(ret)
 		logf("tabHwnd = %d", tabHwnd)
@@ -1326,19 +1332,21 @@ func wndProc(hwnd syscall.Handle, msg uint32, wParam, lParam uintptr) uintptr {
 		tab2Item := TCITEMW{Mask: tcif, Text: tab2Text}
 		pSendMessageW.Call(uintptr(tabHwnd), TCM_INSERTITEM, 1, uintptr(unsafe.Pointer(&tab2Item)))
 
-		// Tab content area (offset for tab header ~30px)
-		tabTop := uintptr(35)
-		contentW := uintptr(w - 40)
-		contentH := uintptr(h - 50)
+		// Content area inside tab (below tab header, with margins)
+		tabTop := uintptr(32)
+		contentW := uintptr(clientW - 20)
+		contentH := uintptr(clientH - 40)
 
 		// ---- Tab 1: VN Input controls ----
+		btnRowY := contentH - 45 + tabTop
+
 		ret, _, _ = pCreateWindowExW.Call(
 			WS_EX_CLIENTEDGE,
 			uintptr(unsafe.Pointer(utf16Ptr("EDIT"))),
 			0,
 			WS_CHILD|WS_VISIBLE|WS_VSCROLL|WS_TABSTOP|ES_MULTILINE|ES_AUTOVSCROLL|ES_WANTRETURN,
 			10, tabTop,
-			contentW, contentH-90,
+			contentW, btnRowY-tabTop-10,
 			uintptr(hwnd), IDC_EDIT_CTRL, 0, 0)
 		editHwnd = syscall.Handle(ret)
 		logf("editHwnd = %d", editHwnd)
@@ -1347,7 +1355,7 @@ func wndProc(hwnd syscall.Handle, msg uint32, wParam, lParam uintptr) uintptr {
 			uintptr(unsafe.Pointer(utf16Ptr("BUTTON"))),
 			uintptr(unsafe.Pointer(utf16Ptr("OK (Ctrl+Enter)"))),
 			WS_CHILD|WS_VISIBLE|WS_TABSTOP|BS_DEFPUSHBUTTON,
-			uintptr(w-316), contentH-50+tabTop,
+			contentW-270, btnRowY,
 			160, 35,
 			uintptr(hwnd), IDC_OK_BTN, 0, 0)
 		okBtn = syscall.Handle(ret)
@@ -1356,8 +1364,8 @@ func wndProc(hwnd syscall.Handle, msg uint32, wParam, lParam uintptr) uintptr {
 			uintptr(unsafe.Pointer(utf16Ptr("BUTTON"))),
 			uintptr(unsafe.Pointer(utf16Ptr("Hủy (Esc)"))),
 			WS_CHILD|WS_VISIBLE|WS_TABSTOP|BS_PUSHBUTTON,
-			uintptr(w-146), contentH-50+tabTop,
-			120, 35,
+			contentW-100, btnRowY,
+			110, 35,
 			uintptr(hwnd), IDC_CANCEL_BTN, 0, 0)
 		cancelBtn = syscall.Handle(ret)
 
@@ -1365,7 +1373,7 @@ func wndProc(hwnd syscall.Handle, msg uint32, wParam, lParam uintptr) uintptr {
 			uintptr(unsafe.Pointer(utf16Ptr("BUTTON"))),
 			uintptr(unsafe.Pointer(utf16Ptr("Prompts"))),
 			WS_CHILD|WS_VISIBLE|WS_TABSTOP|BS_PUSHBUTTON,
-			10, contentH-50+tabTop,
+			10, btnRowY,
 			100, 35,
 			uintptr(hwnd), IDC_PROMPTS_BTN, 0, 0)
 		promptsBtn = syscall.Handle(ret)
@@ -1378,15 +1386,15 @@ func wndProc(hwnd syscall.Handle, msg uint32, wParam, lParam uintptr) uintptr {
 		}
 
 		// ---- Tab 2: Video Convert controls ----
-		btnY := tabTop + 5
+		convY := tabTop + 10
 
 		// "Chọn file MP4" button
 		ret, _, _ = pCreateWindowExW.Call(0,
 			uintptr(unsafe.Pointer(utf16Ptr("BUTTON"))),
 			uintptr(unsafe.Pointer(utf16Ptr("Chọn file MP4..."))),
 			WS_CHILD|WS_TABSTOP|BS_PUSHBUTTON,
-			10, btnY,
-			160, 35,
+			10, convY,
+			160, 32,
 			uintptr(hwnd), IDC_CONV_FILE_BTN, 0, 0)
 		convFileBtn := syscall.Handle(ret)
 
@@ -1395,19 +1403,20 @@ func wndProc(hwnd syscall.Handle, msg uint32, wParam, lParam uintptr) uintptr {
 			uintptr(unsafe.Pointer(utf16Ptr("STATIC"))),
 			uintptr(unsafe.Pointer(utf16Ptr("Chưa chọn file"))),
 			WS_CHILD|SS_LEFT|SS_PATHELLIPSIS,
-			180, btnY+8,
-			contentW-170, 22,
+			180, convY+7,
+			contentW-180, 22,
 			uintptr(hwnd), IDC_CONV_FILE_LABEL, 0, 0)
 		convFileLabelHwnd = syscall.Handle(ret)
 
 		// Convert buttons row
-		convBtnY := btnY + 55
+		convBtnY := convY + 50
+		convBtnW := uintptr((int(contentW) - 20) / 3) // divide evenly with gaps
 		ret, _, _ = pCreateWindowExW.Call(0,
 			uintptr(unsafe.Pointer(utf16Ptr("BUTTON"))),
 			uintptr(unsafe.Pointer(utf16Ptr("→ WebM VP9"))),
 			WS_CHILD|WS_TABSTOP|BS_PUSHBUTTON,
 			10, convBtnY,
-			160, 40,
+			convBtnW, 38,
 			uintptr(hwnd), IDC_CONV_WEBM_BTN, 0, 0)
 		convWebmBtn = syscall.Handle(ret)
 
@@ -1415,8 +1424,8 @@ func wndProc(hwnd syscall.Handle, msg uint32, wParam, lParam uintptr) uintptr {
 			uintptr(unsafe.Pointer(utf16Ptr("BUTTON"))),
 			uintptr(unsafe.Pointer(utf16Ptr("→ MP4 H.265"))),
 			WS_CHILD|WS_TABSTOP|BS_PUSHBUTTON,
-			180, convBtnY,
-			160, 40,
+			10+convBtnW+5, convBtnY,
+			convBtnW, 38,
 			uintptr(hwnd), IDC_CONV_H265_BTN, 0, 0)
 		convH265Btn = syscall.Handle(ret)
 
@@ -1424,19 +1433,19 @@ func wndProc(hwnd syscall.Handle, msg uint32, wParam, lParam uintptr) uintptr {
 			uintptr(unsafe.Pointer(utf16Ptr("BUTTON"))),
 			uintptr(unsafe.Pointer(utf16Ptr("→ MP3 320kbps"))),
 			WS_CHILD|WS_TABSTOP|BS_PUSHBUTTON,
-			350, convBtnY,
-			160, 40,
+			10+convBtnW*2+10, convBtnY,
+			convBtnW, 38,
 			uintptr(hwnd), IDC_CONV_MP3_BTN, 0, 0)
 		convMp3Btn = syscall.Handle(ret)
 
 		// Progress bar
-		progressY := convBtnY + 60
+		progressY := convBtnY + 55
 		ret, _, _ = pCreateWindowExW.Call(0,
 			uintptr(unsafe.Pointer(utf16Ptr("msctls_progress32"))),
 			0,
 			WS_CHILD|PBS_SMOOTH,
 			10, progressY,
-			contentW, 25,
+			contentW, 22,
 			uintptr(hwnd), IDC_CONV_PROGRESS, 0, 0)
 		convProgressHwnd = syscall.Handle(ret)
 		// Set range 0-100
@@ -1447,8 +1456,8 @@ func wndProc(hwnd syscall.Handle, msg uint32, wParam, lParam uintptr) uintptr {
 			uintptr(unsafe.Pointer(utf16Ptr("STATIC"))),
 			uintptr(unsafe.Pointer(utf16Ptr(""))),
 			WS_CHILD|SS_LEFT,
-			10, progressY+30,
-			contentW, 25,
+			10, progressY+28,
+			contentW, 22,
 			uintptr(hwnd), IDC_CONV_STATUS, 0, 0)
 		convStatusHwnd = syscall.Handle(ret)
 
@@ -1457,8 +1466,8 @@ func wndProc(hwnd syscall.Handle, msg uint32, wParam, lParam uintptr) uintptr {
 			uintptr(unsafe.Pointer(utf16Ptr("BUTTON"))),
 			uintptr(unsafe.Pointer(utf16Ptr("Hủy convert"))),
 			WS_CHILD|WS_TABSTOP|BS_PUSHBUTTON,
-			10, progressY+60,
-			130, 35,
+			10, progressY+55,
+			130, 32,
 			uintptr(hwnd), IDC_CONV_CANCEL_BTN, 0, 0)
 		convCancelBtn = syscall.Handle(ret)
 
